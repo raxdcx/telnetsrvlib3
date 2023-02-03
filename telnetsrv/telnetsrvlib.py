@@ -22,21 +22,14 @@ Various settings can affect the operation of the server:
                    Function.aliases may be a list of alternative spellings
 """
 
-import sys
-if sys.version_info > (3, 0):
-    from socketserver import BaseRequestHandler
-else:
-    from SocketServer import BaseRequestHandler
-import socket
-import struct
-import sys
-import traceback
+import curses
 import curses.ascii
 import curses.has_key
-import curses
 import logging
-#if not hasattr(socket, 'SHUT_RDWR'):
-#    socket.SHUT_RDWR = 2
+import socket
+import sys
+import traceback
+from socketserver import BaseRequestHandler
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +123,7 @@ PRAGMA_HEARTBEAT = chr(140) # TELOPT PRAGMA HEARTBEAT
 EXOPL = chr(255) # Extended-Options-List
 NOOPT = chr(0)
 
-#Codes used in SB SE data stream for terminal type negotiation
+# Codes used in SB SE data stream for terminal type negotiation
 IS = chr(0)
 SEND = chr(1)
 
@@ -196,7 +189,7 @@ CMDS = {
 class command():
     "Function decorator to define a telnet command."
     def __init__(self, names, hidden=False):
-        if type(names) is str:
+        if isinstance(names, str):
             self.name = names
             self.alias = []
         else:
@@ -210,13 +203,13 @@ class command():
             # Try to prepend to the list of aliases.
             fn.aliases.append(fn.command_name)
             fn.aliases.extend(self.alias)
-            fn.command_name = self.name
             fn.hidden = self.hidden or fn.hidden
         except:
             # If that didn't work, this method only has one decorator
             fn.aliases = self.alias
-            fn.command_name = self.name
             fn.hidden = self.hidden
+        finally:
+            fn.command_name = self.name
         return fn
 
 
@@ -490,7 +483,6 @@ class TelnetHandlerBase(BaseRequestHandler):
             self.COMMANDS[name] = method
             for alias in getattr(method, "aliases", []):
                 self.COMMANDS[alias.upper()] = self.COMMANDS[name]
-
         # Call the base class init method
         super().__init__(request, client_address, server)
 
@@ -1078,6 +1070,29 @@ class TelnetHandlerBase(BaseRequestHandler):
             # No authentication desired
             self.username = None
             return True
+        
+    def _get_cmd_method(self):
+        """
+        Function that will compare the cli's raw input with the COMMANDS dict so that it can
+        return the method we are searching for that was declared using the `command` class.
+        Returns:
+            tuple: This tuple has a boolean element and a function element.
+            The boolean indicates whether we should consider the whole input as a command or not.
+            The function is a method previously created using the `command` class. `True` indicates
+            the whole cli input is a command, while `False` indicates only the first element is the command
+            and all the other elements are parameters.
+        """
+        uppercase_input = self.input.raw.upper()
+        output = (False, None)
+        for cmd, _ in self.COMMANDS.items():
+            if cmd in uppercase_input:
+                output = False, self.COMMANDS[cmd]
+                if len(cmd.split(" ")) > 1:
+                    # There's a border case in which it could happen that there are commands that could collide.
+                    # E.g. @command("echo test") and @command("echo") -> they will collide if the cli's input is:
+                    # "echo test", in this case it will take the one with the shorter command.
+                    output = True, self.COMMANDS[cmd]
+        return output
 
     def handle(self):
         "The actual service to which the user has connected."
@@ -1106,19 +1121,27 @@ class TelnetHandlerBase(BaseRequestHandler):
             self.input = self.input_reader(self, raw_input)
             self.raw_input = self.input.raw
             if self.input.cmd:
-                cmd = self.input.cmd.upper()
-                params = self.input.params
-                if cmd in self.COMMANDS:
+                is_all_input_command, method = self._get_cmd_method()
+                if method is not None:
+                    params = []
+                    if not is_all_input_command:
+                        params = self.input.params
                     try:
-                        self.COMMANDS[cmd](params)
-                    except:
-                        log.exception("Error calling '%s.'" % cmd)
-                        (t, p, tb) = sys.exc_info()
-                        if self.handleException(t, p, tb):
-                            break
+                        method(params)
+                    except Exception:
+                        if not is_all_input_command:
+                            log.exception(f"Error calling '{self.input.cmd}'")
+                        else:
+                            log.exception(f"Error calling '{self.raw_input}'")
+                            (t, p, tb) = sys.exc_info()
+                            if self.handleException(t, p, tb):
+                                break
                 else:
-                    self.writeerror("Unknown command '%s'" % cmd)
+                    if not is_all_input_command:
+                        msg = self.input.cmd
+                    else:
+                        msg = self.raw_input
+                    self.writeerror(f"Unknown command '{msg}'")
         log.debug("Exiting handler")
-
 
 # vim: set syntax=python ai showmatch:
