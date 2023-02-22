@@ -499,6 +499,17 @@ class TelnetHandlerBase(BaseRequestHandler):
         def __init__(self):
             self.sock = None
 
+    def change_prompt(self, prompt):
+        """
+        This function change_prompt takes in a prompt argument and updates 
+        the self.PROMPT attribute of the object that the function is called on.
+        Args:
+            prompt (str): prompt to which it will be changed.
+        """
+        if len(prompt) > 1:
+            self.PROMPT = " ".join(prompt)
+        else:
+            self.PROMPT = "".join(prompt)
 
     @classmethod
     def streamserver_handle(cls, sock, address):
